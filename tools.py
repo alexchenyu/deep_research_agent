@@ -16,22 +16,26 @@ from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 import html5lib
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import openai
 import requests
 from bs4 import BeautifulSoup
 
 from common import TokenTracker
+from llm_adapter import get_adapter
 
 logger = logging.getLogger(__name__)
 
 class CachedChatCompletion:
-    """Handles chat completions with token usage tracking."""
-    
+    """Handles chat completions with token usage tracking.
+
+    Modified to use our LLM adapter (Grok/GLM) instead of OpenAI directly.
+    """
+
     def __init__(self):
-        self.client = openai.OpenAI()
+        self.adapter = get_adapter()
         self.token_tracker = TokenTracker()
-    
+
     def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -40,51 +44,22 @@ class CachedChatCompletion:
         functions: Optional[List[Dict]] = None,
         function_call: Optional[Union[str, Dict]] = None,
         reasoning_effort: str = 'high',
-    ) -> openai.types.chat.ChatCompletion:
-        """Get chat completion with OpenAI's built-in caching."""
-        # Prepare API call parameters
-        params = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature
-        }
-        
-        # Add reasoning_effort only for models starting with 'o'
-        if model.startswith('o'):
-            params["reasoning_effort"] = reasoning_effort
-            
-        if functions:
-            params["functions"] = functions
-        if function_call:
-            params["function_call"] = function_call
-            
-        # Make API call
-        response = self.client.chat.completions.create(**params)
-        
-        # Update token usage tracking
-        usage = {
-            'prompt_tokens': response.usage.prompt_tokens,
-            'completion_tokens': response.usage.completion_tokens,
-            'total_tokens': response.usage.total_tokens,
-            'cached_prompt_tokens': getattr(response.usage.prompt_tokens_details, 'cached_tokens', 0) if hasattr(response.usage, 'prompt_tokens_details') else 0
-        }
-        
-        # Calculate thinking time and update usage
-        thinking_time = 0.0  # This should be passed in from the agent
-        self.token_tracker.update_usage(usage, thinking_time, model)
-        
-        return response
-    
+        role: str = "default",
+    ):
+        """Get chat completion using our LLM adapter (Grok/GLM)."""
+        return self.adapter.chat_completion(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            functions=functions,
+            function_call=function_call,
+            reasoning_effort=reasoning_effort,
+            role=role
+        )
+
     def get_token_usage(self) -> Dict[str, Union[int, float]]:
         """Get current token usage statistics."""
-        usage = self.token_tracker.get_total_usage()
-        return {
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-            "cached_prompt_tokens": usage.cached_prompt_tokens,
-            "total_tokens": usage.total_tokens,
-            "total_cost": usage.total_cost
-        }
+        return self.adapter.get_token_usage()
 
 # Initialize global chat completion instance
 chat_completion = CachedChatCompletion()
@@ -372,9 +347,20 @@ def create_file(filename: str, content: str) -> str:
         Success message or error message
     """
     try:
-        with open(filename, 'w', encoding='utf-8') as f:
+        # 检查是否有输出目录配置（通过环境变量）
+        output_dir = os.environ.get('DEEP_RESEARCH_OUTPUT_DIR', '')
+        
+        # 所有文件（包括 scratchpad.md）都保存到输出目录
+        if output_dir:
+            # 确保输出目录存在
+            os.makedirs(output_dir, exist_ok=True)
+            filepath = os.path.join(output_dir, filename)
+        else:
+            filepath = filename
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        return f"Successfully created/updated file: {filename}"
+        return f"Successfully created/updated file: {filepath}"
     except Exception as e:
         return f"Error creating file: {str(e)}"
 

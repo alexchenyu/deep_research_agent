@@ -140,12 +140,16 @@ class PlannerAgent:
 
     def _load_file_contents(self, context: PlannerContext) -> Dict[str, str]:
         """Load contents of all created files."""
+        import os
         file_contents = {}
+        output_dir = os.environ.get('DEEP_RESEARCH_OUTPUT_DIR', '')
         for filename in context.created_files:
             try:
-                with open(filename, 'r', encoding='utf-8') as f:
+                # 优先从输出目录读取，如果不存在则从当前目录读取
+                filepath = os.path.join(output_dir, filename) if output_dir and os.path.exists(os.path.join(output_dir, filename)) else filename
+                with open(filepath, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    logger.debug(f"Loaded file {filename}")
+                    logger.debug(f"Loaded file {filepath}")
                     file_contents[filename] = content
             except Exception as e:
                 logger.error(f"Error reading file {filename}: {e}")
@@ -219,7 +223,8 @@ class PlannerAgent:
                             "required": ["filename", "content"]
                         }
                     }],
-                    "function_call": "auto"
+                    "function_call": "auto",
+                    "role": "planner"  # Use Grok for complex reasoning
                 }
                 
                 # Add reasoning_effort for models starting with 'o'

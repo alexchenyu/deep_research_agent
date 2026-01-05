@@ -3,6 +3,7 @@ Executor Agent for Deep Research system.
 Responsible for executing concrete tasks and providing results.
 """
 
+import asyncio
 import logging
 import os
 import json
@@ -13,12 +14,22 @@ from datetime import datetime
 from typing import List, Set, Dict, Optional, Any, Union
 from dataclasses import dataclass
 
-from anthropic import Anthropic
+# 使用我们的 Anthropic 适配器代替真实的 Anthropic SDK
+from anthropic_adapter import Anthropic
 
 # Import tools module instead of individual functions that may not be directly exposed
 import tools
 from tool_definitions import function_definitions
 from common import TokenUsage, TokenTracker
+
+# Google Finance client (optional - gracefully handle if not available)
+try:
+    from google_finance.client import GoogleFinanceClient
+    from google_finance.auth import GoogleAuthManager
+    GOOGLE_FINANCE_AVAILABLE = True
+except ImportError:
+    GOOGLE_FINANCE_AVAILABLE = False
+    GoogleFinanceClient = None
 
 logger = logging.getLogger(__name__)
 
@@ -102,26 +113,20 @@ class ExecutorAgent:
     
     def __init__(self, model: str):
         """Initialize the Executor agent.
-        
+
         Args:
-            model: The model to use (only Claude 3.7 Sonnet is supported)
+            model: The model to use (使用我们的 Grok/GLM 配置)
         """
-        # Always use Claude 3.7 Sonnet regardless of input
-        self.model = "claude-3-7-sonnet-20250219"
+        # 使用我们的 LLM 配置，模型名只是标识
+        self.model = "grok-executor"
         self.system_prompt = self._load_system_prompt()
-        
-        # Get API key from environment
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            logger.error("ANTHROPIC_API_KEY not found in environment. Please set it before using Claude.")
-            raise ValueError("ANTHROPIC_API_KEY environment variable is required but not set")
-        
-        # Initialize the Anthropic client
+
+        # 初始化我们的 Anthropic 适配器（不需要真实 API key）
         try:
-            self.client = Anthropic(api_key=api_key)
-            logger.info("Successfully initialized Anthropic client")
+            self.client = Anthropic()
+            logger.info("Successfully initialized LLM adapter (Grok/GLM)")
         except Exception as e:
-            logger.error(f"Failed to initialize Anthropic client: {str(e)}")
+            logger.error(f"Failed to initialize LLM adapter: {str(e)}")
             raise
 
     def _load_system_prompt(self) -> str:
@@ -139,12 +144,16 @@ class ExecutorAgent:
 
     def _load_file_contents(self, context: ExecutorContext) -> Dict[str, str]:
         """Load contents of all created files."""
+        import os
         file_contents = {}
+        output_dir = os.environ.get('DEEP_RESEARCH_OUTPUT_DIR', '')
         for filename in context.created_files:
             try:
-                with open(filename, 'r', encoding='utf-8') as f:
+                # 优先从输出目录读取，如果不存在则从当前目录读取
+                filepath = os.path.join(output_dir, filename) if output_dir and os.path.exists(os.path.join(output_dir, filename)) else filename
+                with open(filepath, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    logger.debug(f"Loaded file {filename}")
+                    logger.debug(f"Loaded file {filepath}")
                     file_contents[filename] = content
             except Exception as e:
                 logger.error(f"Error reading file {filename}: {e}")
@@ -286,19 +295,47 @@ class ExecutorAgent:
             elif tool_name == "execute_command":
                 command = tool_input.get("command", "")
                 explanation = tool_input.get("explanation", "")
-                
+
                 if not command:
                     result = "Error: No command provided"
                     logger.error("Command execution failed: no command provided")
                 else:
+                    # Agent 专用虚拟环境路径
+                    agent_venv = os.path.join(os.path.dirname(__file__), ".agent_venv")
+                    agent_python = os.path.join(agent_venv, "bin", "python")
+                    
+                    # 自动转换 pip/python 命令使用 agent 的虚拟环境
+                    if command.startswith("pip install") or command.startswith("pip3 install"):
+                        # 使用 uv pip 安装到 agent 虚拟环境
+                        packages = command.replace("pip install", "").replace("pip3 install", "").strip()
+                        command = f"VIRTUAL_ENV={agent_venv} uv pip install {packages}"
+                        logger.info(f"Converted pip to agent venv: {command}")
+                    elif command.startswith("python ") or command.startswith("python3 "):
+                        # 使用 agent 虚拟环境的 python
+                        script = command.replace("python ", "").replace("python3 ", "").strip()
+                        command = f"{agent_python} {script}"
+                        logger.info(f"Using agent python: {command}")
+                    
                     logger.info(f"Preparing to execute command: {command}")
                     logger.info(f"Command explanation: {explanation}")
+
+                    # 安全命令白名单 - 自动批准
+                    safe_patterns = [
+                        "uv pip install",      # 虚拟环境包安装
+                        f"{agent_python}",     # agent 虚拟环境 python
+                        "cat ", "head ", "tail ", "ls ", "wc ",  # 只读命令
+                        "grep ", "find ", "which ", "echo ",
+                    ]
+                    is_safe = any(command.startswith(p) or p in command for p in safe_patterns)
                     
-                    # Ask for user confirmation
-                    print(f"\nConfirm execution of command: {command}")
-                    print(f"Explanation: {explanation}")
-                    confirmation = input("[y/N]: ").strip().lower()
-                    
+                    if is_safe:
+                        print(f"\n✅ 自动批准安全命令: {command}")
+                        confirmation = 'y'
+                    else:
+                        print(f"\n⚠️  需确认命令: {command}")
+                        print(f"Explanation: {explanation}")
+                        confirmation = input("[y/N]: ").strip().lower()
+
                     if confirmation != 'y':
                         result = "Command execution cancelled by user"
                         logger.info("Command execution cancelled by user")
@@ -325,6 +362,102 @@ class ExecutorAgent:
                             error_msg = f"Error executing command: {str(e)}"
                             logger.error(error_msg)
                             result = error_msg
+
+            # === Google Finance Tools ===
+            elif tool_name == "google_finance_get_stock_data":
+                if not GOOGLE_FINANCE_AVAILABLE:
+                    result = json.dumps({
+                        "error": "Google Finance module not available. Please install dependencies.",
+                        "success": False
+                    })
+                else:
+                    symbol = tool_input.get("symbol", "")
+                    logger.info(f"Fetching Google Finance stock data for: {symbol}")
+
+                    async def _fetch_stock():
+                        async with GoogleFinanceClient() as client:
+                            data = await client.get_stock_data(symbol)
+                            return {
+                                "symbol": data.symbol,
+                                "price": data.price,
+                                "change": data.change,
+                                "change_percent": data.change_percent,
+                                "timestamp": data.timestamp,
+                                "success": True
+                            }
+
+                    try:
+                        stock_data = asyncio.run(_fetch_stock())
+                        result = json.dumps(stock_data, ensure_ascii=False)
+                    except Exception as e:
+                        logger.error(f"Error fetching stock data: {e}")
+                        result = json.dumps({"error": str(e), "success": False})
+
+            elif tool_name == "google_finance_ask_ai":
+                if not GOOGLE_FINANCE_AVAILABLE:
+                    result = json.dumps({
+                        "error": "Google Finance module not available. Please install dependencies.",
+                        "success": False
+                    })
+                else:
+                    question = tool_input.get("question", "")
+                    symbol_context = tool_input.get("symbol_context")
+                    logger.info(f"Asking Google Finance AI: {question[:50]}...")
+
+                    async def _ask_ai():
+                        async with GoogleFinanceClient() as client:
+                            response = await client.ask_ai(question, symbol_context)
+                            return {
+                                "answer": response.answer,
+                                "citations": response.citations,
+                                "query_time_seconds": response.query_time_seconds,
+                                "success": response.success,
+                                "error": response.error
+                            }
+
+                    try:
+                        ai_response = asyncio.run(_ask_ai())
+                        result = json.dumps(ai_response, ensure_ascii=False)
+                    except Exception as e:
+                        logger.error(f"Error asking Google Finance AI: {e}")
+                        result = json.dumps({"error": str(e), "success": False})
+
+            elif tool_name == "google_finance_deep_search":
+                if not GOOGLE_FINANCE_AVAILABLE:
+                    result = json.dumps({
+                        "error": "Google Finance module not available. Please install dependencies.",
+                        "success": False
+                    })
+                else:
+                    query = tool_input.get("query", "")
+                    include_plan = tool_input.get("include_research_plan", True)
+                    timeout = tool_input.get("timeout_seconds", 180)
+                    logger.info(f"Starting Google Finance Deep Search: {query[:50]}...")
+
+                    async def _deep_search():
+                        async with GoogleFinanceClient() as client:
+                            response = await client.deep_search(
+                                query,
+                                include_research_plan=include_plan,
+                                timeout_seconds=timeout
+                            )
+                            return {
+                                "answer": response.answer,
+                                "citations": response.citations,
+                                "research_plan": response.research_plan,
+                                "query_time_seconds": response.query_time_seconds,
+                                "success": response.success,
+                                "error": response.error
+                            }
+
+                    try:
+                        deep_response = asyncio.run(_deep_search())
+                        result = json.dumps(deep_response, ensure_ascii=False)
+                        logger.info(f"Deep Search completed in {deep_response.get('query_time_seconds', 0):.1f}s")
+                    except Exception as e:
+                        logger.error(f"Error in Deep Search: {e}")
+                        result = json.dumps({"error": str(e), "success": False})
+
             else:
                 error_msg = f"Unknown function: {tool_name}"
                 logger.error(error_msg)

@@ -8,3 +8,4 @@ duckduckgo_search>=3.0.0
 beautifulsoup4>=4.9.0
 requests>=2.25.0
 anthropic
+playwright-stealth>=1.0.0

@@ -25,6 +25,7 @@ venv/
 ENV/
 env/
 venv
+.agent_venv/
 
 # IDE
 .idea/
@@ -52,6 +53,9 @@ scratch*.txt
 analysis_*.py
 report_*.md
 scratchpad.md
+
+# Google Finance auth state
+auth_state/
 
 # Jupyter Notebook
 .ipynb_checkpoints

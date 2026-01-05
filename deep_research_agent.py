@@ -166,10 +166,14 @@ class ResearchSession:
         self.token_tracker = TokenTracker()
         self.agent_communication = AgentCommunication()
         
+        # 获取输出目录（如果设置了）
+        self.output_dir = os.environ.get('DEEP_RESEARCH_OUTPUT_DIR', '')
+        self.scratchpad_path = os.path.join(self.output_dir, 'scratchpad.md') if self.output_dir else 'scratchpad.md'
+        
         # Initialize scratchpad with required sections
         self._initialize_scratchpad()
         self.created_files.add('scratchpad.md')
-        logger.info("Created scratchpad.md with initial sections")
+        logger.info(f"Created scratchpad.md at: {self.scratchpad_path}")
 
     def _initialize_scratchpad(self) -> None:
         """Initialize scratchpad.md with the required sections."""
@@ -194,7 +198,7 @@ class ResearchSession:
 ### Executor's Feedback or Assistance Requests
 (Executor: Write here when encountering blockers, questions, or need for more information during execution)
 """
-        with open('scratchpad.md', 'w', encoding='utf-8') as f:
+        with open(self.scratchpad_path, 'w', encoding='utf-8') as f:
             f.write(initial_content)
 
     def _update_scratchpad_section(self, section_name: str, content: str, role: str = "Planner") -> None:
@@ -236,7 +240,7 @@ class ResearchSession:
                 updated_content += '\n### ' + section
             
             # Write back to file
-            with open('scratchpad.md', 'w', encoding='utf-8') as f:
+            with open(self.scratchpad_path, 'w', encoding='utf-8') as f:
                 f.write(updated_content)
                 
             logger.debug(f"Updated section '{section_name}' in scratchpad")
@@ -247,7 +251,7 @@ class ResearchSession:
     def _get_scratchpad_content(self) -> str:
         """Get current content of scratchpad.md."""
         try:
-            with open('scratchpad.md', 'r', encoding='utf-8') as f:
+            with open(self.scratchpad_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 logger.debug(f"Read scratchpad content: {content[:200]}...")
                 return content

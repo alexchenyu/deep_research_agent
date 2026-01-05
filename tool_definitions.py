@@ -79,5 +79,62 @@ function_definitions = [
             },
             "required": ["command", "explanation"]
         }
+    },
+    # === Google Finance Beta Tools ===
+    {
+        "name": "google_finance_get_stock_data",
+        "description": "Fetch real-time stock data from Google Finance Beta including current price, change, and volume. Use this for getting latest stock quotes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Stock ticker symbol (e.g., 'NVDA', 'AAPL', 'GOOGL', 'MSFT')"
+                }
+            },
+            "required": ["symbol"]
+        }
+    },
+    {
+        "name": "google_finance_ask_ai",
+        "description": "Ask a question to Google Finance AI chatbot. Good for quick questions about stocks, market trends, company analysis, or financial concepts. Response time: 10-60 seconds.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the AI chatbot"
+                },
+                "symbol_context": {
+                    "type": "string",
+                    "description": "Optional stock symbol to provide context (e.g., 'NVDA')"
+                }
+            },
+            "required": ["question"]
+        }
+    },
+    {
+        "name": "google_finance_deep_search",
+        "description": "Perform a Deep Search query using Google Finance's Gemini-powered analysis. Use for complex financial research questions that require multi-source analysis. Takes 1-5 minutes to complete.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Complex financial research query"
+                },
+                "include_research_plan": {
+                    "type": "boolean",
+                    "description": "Whether to include the research plan in response",
+                    "default": True
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Maximum time to wait for response (seconds)",
+                    "default": 180
+                }
+            },
+            "required": ["query"]
+        }
     }
 ] 
