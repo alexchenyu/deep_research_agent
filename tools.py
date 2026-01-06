@@ -139,13 +139,14 @@ def perform_search(query: str, max_results: int = 10, max_retries: int = 3) -> s
         return f"Error during search: {e}"
 
 # Web Scraper Implementation
-async def fetch_page(url: str, context) -> Optional[str]:
+async def fetch_page(url: str, context, timeout_ms: int = 15000) -> Optional[str]:
     """
     Asynchronously fetch a webpage's content using Playwright.
 
     Args:
         url: URL to fetch
         context: Playwright browser context
+        timeout_ms: Timeout in milliseconds (default 15 seconds)
 
     Returns:
         Page content as string if successful, None otherwise
@@ -153,13 +154,26 @@ async def fetch_page(url: str, context) -> Optional[str]:
     page = await context.new_page()
     try:
         logger.info(f"Fetching {url}")
-        await page.goto(url)
-        await page.wait_for_load_state('networkidle')
+        # 使用较短超时，先尝试 domcontentloaded (更快)
+        try:
+            await page.goto(url, timeout=timeout_ms, wait_until='domcontentloaded')
+        except Exception:
+            # 如果失败，尝试不等待任何状态
+            await page.goto(url, timeout=timeout_ms)
+        
+        # 尝试等待网络空闲，但不强制要求
+        try:
+            await page.wait_for_load_state('networkidle', timeout=5000)
+        except Exception:
+            pass  # 忽略超时，继续获取已加载的内容
+        
         content = await page.content()
         logger.info(f"Successfully fetched {url}")
         return content
     except Exception as e:
-        logger.error(f"Error fetching {url}: {str(e)}")
+        # 使用 warning 而不是 error，避免日志过于嘈杂
+        logger.warning(f"跳过 {url}: {type(e).__name__}")
+        print(f"      ⚠️ 跳过慢速网站: {url[:50]}...")
         return None
     finally:
         await page.close()
