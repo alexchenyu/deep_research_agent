@@ -120,21 +120,108 @@ def format_search_results(results: List[dict]) -> str:
         output.append(f"Snippet: {result.get('body', 'N/A')}")
     return "\n".join(output)
 
-def perform_search(query: str, max_results: int = 10, max_retries: int = 3) -> str:
+def search_with_grok(query: str, max_results: int = 5) -> List[dict]:
     """
-    Perform a web search and return formatted results.
+    使用 Grok search_parameters 进行网络搜索
+    
+    Args:
+        query: 搜索查询
+        max_results: 最大结果数
+    
+    Returns:
+        搜索结果列表
+    """
+    import os
+    results = []
+    
+    try:
+        api_key = os.getenv("GROK_API_KEY")
+        if not api_key:
+            logger.info("GROK_API_KEY not set, skipping Grok search")
+            return results
+        
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.x.ai/v1"
+        )
+        
+        # 使用 search_parameters 启用搜索 (稳定 API)
+        response = client.chat.completions.create(
+            model="grok-3-fast",
+            messages=[{
+                "role": "user",
+                "content": f"""Search the web for: {query}
+
+Find and return the top {max_results} most relevant and recent results as a JSON array:
+[{{"title": "article title", "href": "https://...", "body": "brief description"}}]
+
+Return ONLY the JSON array, no explanation."""
+            }],
+            extra_body={"search_parameters": {"mode": "on"}},
+            temperature=0,
+            max_tokens=2000
+        )
+        
+        content = response.choices[0].message.content
+        if content:
+            import re
+            import json
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                items = json.loads(json_match.group())
+                for item in items[:max_results]:
+                    results.append({
+                        "title": item.get("title", ""),
+                        "href": item.get("href", item.get("url", "")),
+                        "body": item.get("body", item.get("snippet", "")),
+                        "source": "grok"
+                    })
+        
+        if results:
+            logger.info(f"Grok search found {len(results)} results")
+            
+    except Exception as e:
+        logger.warning(f"Grok search failed: {e}")
+    
+    return results
+
+
+def perform_search(query: str, max_results: int = 10, max_retries: int = 3, use_grok: bool = True) -> str:
+    """
+    Perform a web search using DuckDuckGo + Grok (optional) and return formatted results.
 
     Args:
         query: Search query string
         max_results: Maximum number of results to return
         max_retries: Maximum number of retry attempts
+        use_grok: Whether to also use Grok search (default True)
 
     Returns:
         Formatted string containing search results or error message
     """
     try:
-        results = search_with_retry(query, max_results, max_retries)
-        return format_search_results(results)
+        all_results = []
+        seen_urls = set()
+        
+        # 1. DuckDuckGo 搜索
+        ddg_results = search_with_retry(query, max_results, max_retries)
+        for r in ddg_results:
+            url = r.get('href', '')
+            if url and url not in seen_urls:
+                all_results.append(r)
+                seen_urls.add(url)
+        
+        # 2. Grok 搜索 (补充)
+        if use_grok and len(all_results) < max_results:
+            grok_results = search_with_grok(query, max_results // 2)
+            for r in grok_results:
+                url = r.get('href', '')
+                if url and url not in seen_urls:
+                    all_results.append(r)
+                    seen_urls.add(url)
+        
+        return format_search_results(all_results[:max_results])
     except Exception as e:
         return f"Error during search: {e}"
 
